@@ -54,10 +54,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - data:/usr/src/paperless/data
-      - media:/usr/src/paperless/media
-      - ./export:/usr/src/paperless/export
-      - ./consume:/usr/src/paperless/consume
+      - ./mnt/purplehaze/data/docker-volumes/paperless/data
+      - ./mnt/purplehaze/data/docker-volumes/paperless/media
+      - ./mnt/purplehaze/data/docker-volumes/paperless/export
+      - ./mnt/purplehaze/data/docker-volumes/consume
     env_file: docker-compose.env
     environment:
       PAPERLESS_REDIS: redis://broker:6379
