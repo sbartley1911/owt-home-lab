@@ -54,10 +54,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./mnt/purplehaze/data/docker-volumes/paperless/data
-      - ./mnt/purplehaze/data/docker-volumes/paperless/media
-      - ./mnt/purplehaze/data/docker-volumes/paperless/export
-      - ./mnt/purplehaze/data/docker-volumes/consume
+      - ./mnt/purplehaze/data/docker-volumes/paperless-ngx: /mnt/nfs/paperless/data
+      - ./mnt/purplehaze/data/docker-volumes/paperless-ngx: /mnt/nfs/paperless/media
+      - ./mnt/purplehaze/data/docker-volumes/paperless-ngx: /mnt/nfs/paperless/export
+      - ./mnt/purplehaze/data/docker-volumes/paperless-ngx: /mnt/nfs/paperless/consume
     env_file: docker-compose.env
     environment:
       PAPERLESS_REDIS: redis://broker:6379
@@ -78,7 +78,5 @@ services:
     image: docker.io/apache/tika:latest
     restart: unless-stopped
 volumes:
-  data:
-  media:
-  pgdata:
   redisdata:
+  pgdata:
