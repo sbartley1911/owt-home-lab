@@ -47,9 +47,9 @@ services:
       - db
       - broker
     ports:
-      - "8000:8000"
+      - "8000:8000"/
     volumes:
-      - data:/usr/src/paperless/data
+      - data:/var/lib/docker/volumes/data/_data/data
       - media:/usr/src/paperless/media
       - ./export:/usr/src/paperless/export
       - ./consume:/usr/src/paperless/consume
