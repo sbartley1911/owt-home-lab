@@ -7,7 +7,6 @@ services:
     environment:
       - LOG_LEVEL=debug
       - TZ=US/Central
-      - PORT=5055 #optional
     ports:
       - "5055:5055"
     volumes:
