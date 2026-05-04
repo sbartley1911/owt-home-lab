@@ -1,0 +1,96 @@
+services:
+
+  server:
+    image: standardnotes/server:latest
+    container_name: standardnotes_server
+    restart: unless-stopped
+    depends_on:
+      - db
+      - cache
+      - localstack
+    ports:
+      - "${API_PORT:-3000}:3000"
+      - "${FILES_PORT:-3125}:3104"
+    environment:
+      # Database
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_TYPE: mysql
+      # Cache
+      REDIS_HOST: cache
+      REDIS_PORT: 6379
+      CACHE_TYPE: redis
+      # Secrets — generate each with: openssl rand -hex 32
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
+      AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY}
+      VALET_TOKEN_SECRET: ${VALET_TOKEN_SECRET}
+      # Public URL for the files server (required for file uploads)
+      PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL}
+    volumes:
+      # User data and logs — on NFS
+      - /mnt/nfs/appdata/standardnotes/logs:/var/lib/server/logs
+      - /mnt/nfs/appdata/standardnotes/uploads:/opt/server/packages/files/dist/uploads
+    networks:
+      - standardnotes
+
+  localstack:
+    image: localstack/localstack:3.0
+    container_name: standardnotes_localstack
+    restart: unless-stopped
+    expose:
+      - 4566
+    environment:
+      - SERVICES=sns,sqs
+      # LOCALSTACK_HOST replaces the deprecated HOSTNAME_EXTERNAL (removed in 3.x)
+      - LOCALSTACK_HOST=localstack
+      - LS_LOG=warn
+    volumes:
+      # Bootstrap script — on NFS (read-only config, safe on network storage).
+      # Download it with:
+      #   curl -o /mnt/nfs/appdata/standardnotes/localstack_bootstrap.sh \
+      #     https://raw.githubusercontent.com/standardnotes/server/main/docker/localstack_bootstrap.sh
+      #   chmod +x /mnt/nfs/appdata/standardnotes/localstack_bootstrap.sh
+      - /mnt/nfs/appdata/standardnotes/localstack_bootstrap.sh:/etc/localstack/init/ready.d/localstack_bootstrap.sh
+    networks:
+      - standardnotes
+
+  db:
+    image: mysql:8
+    container_name: standardnotes_db
+    restart: unless-stopped
+    expose:
+      - 3306
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      # Skips timezone table population — cuts first-boot init time significantly
+      MYSQL_INITDB_SKIP_TZINFO: 1
+    volumes:
+      # LOCAL DISK — MySQL data stays on the host for performance and reliability.
+      # NFS introduces file-locking and fsync issues that MySQL does not tolerate well.
+      - /opt/standardnotes/data/mysql:/var/lib/mysql
+      - /opt/standardnotes/data/import:/docker-entrypoint-initdb.d
+    networks:
+      - standardnotes
+
+  cache:
+    image: redis:6.0-alpine
+    container_name: standardnotes_cache
+    restart: unless-stopped
+    expose:
+      - 6379
+    volumes:
+      # LOCAL DISK — Redis persistence stays on the host for performance.
+      # RDB snapshot writes benefit from low-latency local storage.
+      - /opt/standardnotes/data/redis:/data
+    networks:
+      - standardnotes
+
+networks:
+  standardnotes:
+    name: standardnotes_self_hosted
