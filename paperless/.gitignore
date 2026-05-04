@@ -1,0 +1,11 @@
+# Environment variables with secrets
+docker-compose.env
+.env
+
+# Docker volumes (local storage)
+postgres-data/
+redis-data/
+
+# OS files
+.DS_Store
+Thumbs.db
