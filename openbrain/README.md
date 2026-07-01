@@ -2,6 +2,12 @@
 
 OpenBrain is a small, owned memory layer for AI tools and agents. It stores thoughts in Postgres, embeds them for semantic search, and exposes them through MCP so multiple AI clients can use the same memory.
 
+> **Deployment note:** the running setup uses a dedicated `openbrain` database +
+> role and serves MCP through an **n8n** MCP Server Trigger rather than the
+> TypeScript `mcp-server` in `src/`. See
+> [`docs/deployment-live.md`](docs/deployment-live.md). The `src/` app remains the
+> original reference implementation.
+
 ## What This Includes
 
 - Plain Postgres schema with `pgvector`.
