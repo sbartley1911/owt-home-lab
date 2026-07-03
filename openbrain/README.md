@@ -13,6 +13,9 @@ OpenBrain is a small, owned memory layer for AI tools and agents. It stores thou
 - Plain Postgres schema with `pgvector`.
 - Node capture endpoint for JSON, raw text, Slack slash commands, or WhatsApp Cloud API webhooks.
 - TypeScript MCP server with search, recent entries, stats, and capture tools.
+- Consume-folder ingester (`ingester/`) — drop any document (PDF, Office, images, …) into a
+  watched folder and it's text-extracted (with OCR), chunked, embedded, and stored. Uses
+  Apache Tika + Gotenberg for extraction. See `ingester/README.md`.
 - Lifecycle prompts for migration, capture habits, and weekly review.
 
 ## Build Order
