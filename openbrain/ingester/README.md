@@ -33,7 +33,7 @@ model's token limit. Re-dropping an edited file with the same name refreshes its
 | Env | Default | Notes |
 | --- | --- | --- |
 | `DATABASE_URL` | — (required) | Postgres with the OpenBrain schema + pgvector |
-| `OPENAI_API_KEY` | — (required) | for embeddings |
+| `OPENAI_API_KEY` | — (required) | for embeddings — give the ingester its **own** key (see Notes) |
 | `CONSUME_DIR` | `/data/consume` | holds `inbox/ work/ archive/ failed/` |
 | `TIKA_URL` | `http://tika:9998` | Apache Tika (`-full`, with Tesseract) |
 | `GOTENBERG_URL` | `http://gotenberg:3000` | Gotenberg (Office→PDF fallback) |
@@ -61,10 +61,25 @@ you drop files from outside the cluster). Align the pod's `runAsUser`/`runAsGrou
 owner of the folder so drops from another host and the pod's own moves share one identity —
 then the folder can stay owner-writable rather than world-writable.
 
+## Key hygiene & rotation
+
+- **Dedicated API key.** Don't share the ingester's `OPENAI_API_KEY` with any other
+  embedding consumer (like the capture/search path). A shared key means one console
+  deletion or rotation silently breaks every consumer at once — and because this pod
+  fails quietly into `failed/`, it can be the last place you notice. One
+  clearly-named key per consumer makes every revocation surgical.
+- **Rotation reaches nothing by itself.** The pod reads `OPENAI_API_KEY` from its
+  Kubernetes secret **at container start**. After rotating the key: re-sync the k8s
+  secret, restart the deployment (`kubectl rollout restart`), then move anything in
+  `failed/` back to `inbox/` to re-ingest. Skip any step and drops keep failing with
+  401s while the pod looks healthy.
+
 ## Notes
 
+- **No built-in failure alerting.** Files piling into `failed/` raise no alarm on their
+  own — a dead credential can sit unnoticed while every drop quietly fails. Watch
+  `failed/` (or wire an alert on it); the pod also logs a full traceback to stdout on
+  any failure. Nothing is lost — move the file back to `inbox/` to retry.
 - Non-markdown extracts as flat text, so it chunks by size (heading `(whole file)`), losing
   page/sheet/slide structure. Adequate for search.
 - Scanned/image-only content relies on Tika's Tesseract OCR — quality tracks the scan.
-- The ingester logs a full traceback to stdout on any failure, and moves the file to
-  `failed/` (nothing is lost); move it back to `inbox/` to retry.
