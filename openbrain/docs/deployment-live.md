@@ -8,7 +8,7 @@ the reference implementation in `src/` and `docs/setup.md` in two ways:
 2. **MCP served by n8n** — the tools are exposed through an n8n **MCP Server
    Trigger** workflow rather than the standalone TypeScript `mcp-server`. The
    `src/` app is the original reference implementation and is not deployed in this
-   setup.
+   setup. The workflows are exported in [`../n8n/`](../n8n/).
 
 ## Database layer
 
@@ -20,8 +20,18 @@ On a CloudNativePG (CNPG) cluster with PostgreSQL + pgvector:
   pinned through the cluster's `spec.managed.roles`. CNPG enforces exactly that
   value, so the credential doesn't drift and a copy stored in your secret manager
   stays valid.
-- The schema (`db/migrations/0001_openbrain.sql`) is applied to the `openbrain`
-  database **as the `openbrain` role**, so the role owns its objects.
+- The schema is applied to the `openbrain` database **as the `openbrain` role**,
+  so the role owns its objects, using the migration runner in `db/`:
+  | Migration | Adds |
+  | --- | --- |
+  | `0001_openbrain.sql` | `brain_entries`, indexes, `match_brain_entries`, `brain_stats` |
+  | `0002_hybrid_search.sql` | `hybrid_brain_entries`: vector + full-text fused with RRF |
+  | `0005_supersession.sql` | supersession marks, provenance, capture guard; retrieval hides superseded rows |
+  | `0006_retrieval_feedback.sql` | `rsi` schema: logged retrieval wrappers and usefulness feedback |
+  | `0007_reports_and_email_delivery.sql` | `reports` (ingest failures) and the alert delivery ledger |
+
+  Numbers 0003–0004 are intentionally unused here; the runner doesn't need
+  contiguous numbers.
 
 ## MCP layer (n8n)
 
@@ -38,18 +48,32 @@ exposes only OpenBrain's tools.
   | Tool | Backing |
   | --- | --- |
   | `brain_stats` | Postgres tool → `select brain_stats()` |
-  | `recent_entries` | Postgres tool → newest rows |
+  | `recent_entries` | Postgres tool → `rsi.recent(...)` (newest rows, superseded hidden unless `include_history`) |
+  | `get_entry_by_id` | Postgres tool → `rsi.entry(...)` (exact lookup by UUID) |
   | `capture_thought` | sub-workflow: OpenAI embed → `insert into brain_entries` |
-  | `semantic_search` | sub-workflow: OpenAI embed → `match_brain_entries` |
+  | `semantic_search` | sub-workflow: OpenAI embed → `rsi.search(...)` over `hybrid_brain_entries` |
+  | `record_retrieval_feedback` | Postgres tool → `rsi.record_feedback(...)` |
 
 The two embedding tools are backed by sub-workflows (OpenAI embed → SQL). Their
 sub-workflows must be **active** for the trigger to call them.
 
+Every read goes through the `rsi.*` wrappers, which log the request and the ordered
+result IDs (not content) and tag each hit with a `request_id`. A client can then
+rate that retrieval with `record_retrieval_feedback`. Each trigger workflow passes a
+fixed caller label (`mcp:openbrain`, `mcp:openbrain-openai`), so feedback is limited
+to retrievals from the same endpoint. Details in [`../rsi/README.md`](../rsi/README.md).
+
 **Per-consumer endpoints** — an n8n MCP Server Trigger validates exactly one
 bearer. To give a second client its own independently-revocable credential (or a
 read-only subset — e.g. no `capture_thought`), add a second trigger workflow on
-its own path with its own bearer, wired to the same sub-workflows. Revoking that
-workflow or credential cuts off that consumer without touching any other.
+its own path with its own bearer, wired to the same sub-workflows
+(`n8n/openbrain-mcp-openai.json` is an example). Revoking that workflow or
+credential cuts off that consumer without touching any other.
+
+Recent n8n versions also let the trigger use **n8n OAuth2** authentication
+(typeVersion 2.1) instead of a bearer: MCP clients that support OAuth register
+themselves and the user consents once per machine, so no token sits in client
+config. It's a good fit for a second consumer such as another vendor's agent.
 
 Client config (any MCP client that supports remote Streamable HTTP servers):
 
@@ -65,6 +89,10 @@ Client config (any MCP client that supports remote Streamable HTTP servers):
 }
 ```
 
+Clients that support a headers helper (a command run at connect time) can fetch
+the bearer from your secret manager instead of storing it in config, which also
+picks up rotations without editing anything.
+
 ## Embeddings
 
 OpenAI `text-embedding-3-small` (1536-dim), matching the `vector(1536)` column.
@@ -79,10 +107,18 @@ that key in the provider console — say, while cleaning up — silently takes d
 separate, clearly-named key per consumer so a revocation only ever breaks the one
 thing it names.
 
+## Ingest failure alerts
+
+The consume ingester writes an `ingest-failure` row to `public.reports` whenever a
+file lands in `failed/`. A scheduled n8n workflow
+(`ingester/workflow.ingest-failure-alerts.json`) claims unnotified rows under a
+lease and emails one digest. See [`../ingester/README.md`](../ingester/README.md).
+
 ## Notes
 
-- Store the connection URL, the MCP bearer token, and the OpenAI key(s) in a secret
-  manager — never in the repo.
+- Store the connection URL, the MCP bearer token(s), and the OpenAI key(s) in a
+  secret manager — never in the repo. The workflow exports reference n8n
+  credentials by placeholder id only.
 - The n8n Postgres credential connects to CNPG's self-signed certificate with
   "Ignore SSL Issues" enabled and no explicit SSL mode set.
 - Kubernetes consumers read secrets into env **at container start** — rotating a

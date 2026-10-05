@@ -132,7 +132,10 @@ begin
   end if;
 end$$;
 
-grant connect on database openbrain to openbrain_app;
+do $$
+begin
+  execute format('grant connect on database %I to openbrain_app', current_database());
+end$$;
 grant usage on schema public to openbrain_app;
 grant select, insert on public.brain_entries to openbrain_app;
 grant execute on function public.match_brain_entries(vector, int, text) to openbrain_app;

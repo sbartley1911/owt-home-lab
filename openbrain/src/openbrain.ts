@@ -13,6 +13,8 @@ export type BrainEntry = {
   entry_type: string;
   captured_at: string;
   similarity?: number;
+  /** Supersession mark (migration 0005): 'live' | 'superseded'. */
+  status?: string;
 };
 
 export type CaptureInput = {
@@ -136,16 +138,26 @@ export async function semanticSearch(
   return result.rows;
 }
 
-export async function recentEntries(pool: pg.Pool, limit: number, source?: string): Promise<BrainEntry[]> {
+export async function recentEntries(
+  pool: pg.Pool,
+  limit: number,
+  source?: string,
+  includeHistory = false
+): Promise<BrainEntry[]> {
+  // Honour the supersession mark (migration 0005): retired entries are
+  // excluded by default, same as semantic retrieval. A freshly superseded row
+  // is the NEWEST row, so an unfiltered recency list leads with exactly the
+  // memory that was just retired.
   const result = await pool.query<BrainEntry>(
     `
-      select id, content, source, source_ref, metadata, people, topics, entry_type, captured_at
+      select id, status, content, source, source_ref, metadata, people, topics, entry_type, captured_at
       from public.brain_entries
       where ($2::text is null or source = $2)
+        and ($3 or status <> 'superseded')
       order by captured_at desc
       limit $1
     `,
-    [Math.max(1, Math.min(limit, 50)), source ?? null]
+    [Math.max(1, Math.min(limit, 50)), source ?? null, includeHistory]
   );
 
   return result.rows;

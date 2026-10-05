@@ -1,0 +1,346 @@
+{
+  "name": "OpenBrain MCP",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "openbrain",
+        "authentication": "bearerAuth"
+      },
+      "id": "2bec7092-8ede-42cb-86c6-c852c2004f18",
+      "name": "OpenBrain MCP Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "0790decf-de6c-4169-be5f-c7648f52b7fa",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "REPLACE_WITH_BEARER_CREDENTIAL_ID",
+          "name": "OpenBrain MCP Bearer"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Return aggregate statistics about the OpenBrain memory store (entry_count, first/last capture, top sources and topics). No input required.",
+        "operation": "executeQuery",
+        "query": "select brain_stats() as stats",
+        "options": {}
+      },
+      "id": "0c78727e-04a7-4d11-b2ea-5f3e1dd2f474",
+      "name": "brain_stats",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "List the most recent OpenBrain memory entries, newest first. Excludes superseded (retired) memories unless include_history is true. Optional integer 'count' controls how many to return (default 10). Each hit also has request_id, outcome, and telemetry. Empty/error responses contain one metadata-only row.",
+        "operation": "executeQuery",
+        "query": "select r.* from jsonb_to_recordset(rsi.response_items(rsi.recent(gen_random_uuid()::text,$3::text,$1::int,$2::boolean))) as r(id uuid,status text,content text,source text,source_ref text,captured_at timestamptz,request_id text,outcome text,telemetry text,error_code text,telemetry_error_code text,warning text)",
+        "options": {
+          "queryReplacement": "={{ [$fromAI('count','how many recent entries to return','number',10),$fromAI('include_history','include superseded entries','boolean',false),'mcp:openbrain'] }}"
+        }
+      },
+      "id": "8de42842-3c99-48e3-92e4-ba1258bb3656",
+      "name": "recent_entries",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        380
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "capture_thought",
+        "description": "Save a new thought/note into the user's OpenBrain memory. Returns the entry id. Pass source_ref to make retries idempotent (same source+source_ref updates instead of duplicating).",
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_CAPTURE_WORKFLOW_ID",
+          "mode": "id",
+          "cachedResultName": "OpenBrain: capture"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content": "={{ $fromAI('content','the exact thought text to remember','string') }}",
+            "source": "={{ $fromAI('source','short source label','string','mcp') }}",
+            "source_ref": "={{ $fromAI('source_ref','stable reference for idempotent retries (e.g. session id + note slug); empty string means no dedup','string','') }}",
+            "entry_type": "={{ $fromAI('entry_type','kind of entry: thought, decision, finding, reference...','string','thought') }}",
+            "metadata": "={{ $fromAI('metadata','optional JSON object with extra context','string','') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "content",
+              "displayName": "content",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_ref",
+              "displayName": "source_ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "entry_type",
+              "displayName": "entry_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "metadata",
+              "displayName": "metadata",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "7c7f81a3-6a4f-400b-81e3-4d7850550470",
+      "name": "capture_thought",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        560
+      ],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "name": "semantic_search",
+        "description": "Search the user's OpenBrain memory by meaning; returns the most similar stored thoughts. Each hit also has request_id, outcome, and telemetry status. Empty/error responses contain one metadata-only row. Use request_id for record_retrieval_feedback; unrated does not mean not useful.",
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SEARCH_WORKFLOW_ID",
+          "mode": "id",
+          "cachedResultName": "OpenBrain: search"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $fromAI('query','what to search for','string') }}",
+            "count": "={{ $fromAI('count','max results','number',8) }}",
+            "source": "={{ $fromAI('source','optional source filter','string','') }}",
+            "retrieval_caller": "mcp:openbrain"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "count",
+              "displayName": "count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "retrieval_caller",
+              "displayName": "retrieval_caller",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "f778a53e-c724-401e-ad8b-7ccfe600cf25",
+      "name": "semantic_search",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        740
+      ],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Fetch ONE OpenBrain entry by its exact id. Takes a brain_entries UUID (for example one returned by semantic_search or stored by another system) and returns that entry verbatim: id, content, source, source_ref, captured_at. Use this whenever you already hold an id - it is an exact lookup, not a similarity guess. Returns an empty result if the id does not exist. Each hit also has request_id, outcome, and telemetry. Empty/error responses contain one metadata-only row.",
+        "operation": "executeQuery",
+        "query": "select r.* from jsonb_to_recordset(rsi.response_items(rsi.entry(gen_random_uuid()::text,$2::text,$1::text))) as r(id uuid,content text,source text,source_ref text,captured_at timestamptz,status text,superseded_by uuid,supersession_reason text,request_id text,outcome text,telemetry text,error_code text,telemetry_error_code text,warning text)",
+        "options": {
+          "queryReplacement": "={{ [$fromAI('id','the OpenBrain entry UUID to fetch exactly','string'),'mcp:openbrain'] }}"
+        }
+      },
+      "id": "ab0146f6-c804-4ff1-a2df-b69706022e41",
+      "name": "get_entry_by_id",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        500
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      }
+    },
+    {
+      "id": "fe8786b7-85ad-44e7-a487-f8f1bd024e1e",
+      "name": "record_retrieval_feedback",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        480
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      },
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Record explicit usefulness for a logged retrieval from this MCP endpoint. Supply a new UUID feedback_id and reuse it only for retries of the identical submission. usefulness: useful, partly_useful, or not_useful. Endpoint identity is shared, not a verified individual. Do not infer usefulness from search scores.",
+        "operation": "executeQuery",
+        "query": "select rsi.record_feedback($1::uuid,$2::text,$3::text,$4::text,NULLIF($5::text,''),NULLIF($6::text,'')::uuid) as feedback",
+        "options": {
+          "queryReplacement": "={{ [$fromAI('feedback_id','UUID for this feedback; reuse on retry','string'),$fromAI('request_id','request_id from a logged retrieval','string'),'mcp:openbrain',$fromAI('usefulness','useful, partly_useful, or not_useful','string'),$fromAI('reason','optional explanation','string',''),$fromAI('expected_entry_id','optional expected entry UUID','string','')] }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "brain_stats": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenBrain MCP Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "recent_entries": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenBrain MCP Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "capture_thought": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenBrain MCP Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "semantic_search": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenBrain MCP Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_entry_by_id": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenBrain MCP Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "record_retrieval_feedback": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenBrain MCP Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

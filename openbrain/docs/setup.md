@@ -10,13 +10,20 @@ OpenBrain has three pieces:
 
 ## 1. Prepare Postgres
 
-Install Postgres and the `pgvector` extension on your server. Then create a database and user.
-
-Run the migration:
+Install Postgres and the `pgvector` extension on your server. Then create a database and user, and install the extension in that database once as a superuser:
 
 ```bash
-psql "$DATABASE_URL" -f db/migrations/0001_openbrain.sql
+psql -d openbrain -c 'create extension if not exists vector;'
 ```
+
+Apply **every** migration with the runner. 0001 alone gives you vector search but no hybrid search, supersession, retrieval telemetry, or the reports table the ingester writes failures to.
+
+```bash
+pip install 'psycopg[binary]==3.2.*'
+PGHOST=localhost PGDATABASE=openbrain PGUSER=openbrain python db/migrate.py
+```
+
+The runner records each applied file in `public.schema_migrations` and skips it next time, so it is safe to re-run after adding migrations. See [`../db/README.md`](../db/README.md), including how to adopt a database that already has 0001 applied by hand.
 
 The schema uses OpenAI `text-embedding-3-small`, which produces 1536-dimensional vectors. If you switch embedding models, update every `vector(1536)` reference before storing data.
 
@@ -118,9 +125,13 @@ Expose these environment variables to the MCP process:
 - `DATABASE_URL`
 - `OPENBRAIN_EMBEDDING_MODEL`
 
+To serve MCP from n8n instead (hybrid search, exact-ID lookup, retrieval feedback, per-consumer endpoints), import the workflows in [`../n8n/`](../n8n/) and follow [`deployment-live.md`](deployment-live.md).
+
 ## MCP Tools
 
 - `semantic_search`: find memories by meaning.
 - `recent_entries`: browse recent captures.
 - `brain_stats`: see counts, sources, and topics.
 - `capture_thought`: write into OpenBrain from any MCP-capable client.
+
+The n8n endpoint adds `get_entry_by_id` (exact lookup by UUID) and `record_retrieval_feedback` (rate a logged retrieval; see [`../rsi/README.md`](../rsi/README.md)).
