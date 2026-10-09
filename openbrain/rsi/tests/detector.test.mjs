@@ -18,7 +18,7 @@ before(async()=>{
     ['good',['normal prose '.repeat(30)],'active',20],
     ['retired',['bad bad bad'],'superseded',20],
     ['fresh',['normal prose '.repeat(30)],'active',1],
-    ['garbled',['broken � � � extraction'],'active',20],
+    ['garbled',['broken \\uFFFD \\uFFFD \\uFFFD extraction'],'active',20],
     ['recently-updated',['normal prose '.repeat(30)],'active',20]]) {
     for(let n=0;n<bodies.length;n++){
       const id=`10000000-0000-4000-8000-${String(++seq).padStart(12,'0')}`;
