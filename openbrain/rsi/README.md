@@ -144,10 +144,10 @@ as a role that can read the `rsi` tables.
 
 Deploy:
 
-1. Back up the database and confirm the `rsi` schema from 0006 exists. Edit the role
-   list at the end of 0008 to the role n8n connects as, then apply only 0008, as the
-   database owner, with `psql -v ON_ERROR_STOP=1 -f ...`. It runs once in a
-   transaction; an existing table or function aborts it instead of being overwritten.
+1. Back up the database. Edit the role list at the end of 0008 to the role n8n
+   connects as, then run `python db/migrate.py` (see [`../db/README.md`](../db/README.md)).
+   0008 needs 0006 applied and PostgreSQL 15 or later. Don't re-run it by hand: an
+   existing table or function aborts it instead of being overwritten.
 2. Import `workflow.defect-detector.json` inactive. Bind its Postgres node to your
    OpenBrain credential (it ships with `REPLACE_WITH_POSTGRES_CREDENTIAL_ID`), set the
    workflow timezone (it ships as UTC, at 06:15), run it once by hand, and inspect

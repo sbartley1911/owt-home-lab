@@ -14,6 +14,7 @@ OpenBrain is a small, owned memory layer for AI tools and agents. It stores thou
 - Hybrid search: vector similarity and Postgres full-text search fused with reciprocal rank fusion, so exact terms (names, IDs, error strings) that embeddings miss still surface.
 - Supersession: a retired memory is marked with a pointer to its replacement instead of being deleted, and retrieval hides it by default.
 - Retrieval telemetry and explicit usefulness feedback (`rsi/`), so you can see which searches came back empty, errored, or were rated not useful.
+- A retrieval eval runner and a daily document defect review (`rsi/`): score a versioned query suite against search, and queue ingested documents with fragment or garbled chunks, or no recent retrievals, for review. Optional Prometheus alerts watch the daily run.
 - Node capture endpoint for JSON, raw text, Slack slash commands, or WhatsApp Cloud API webhooks.
 - TypeScript MCP server with search, recent entries, stats, and capture tools.
 - n8n workflow exports for the MCP endpoint, search/capture sub-workflows, and a second read-only consumer endpoint (`n8n/`).
@@ -33,7 +34,7 @@ OpenBrain is a small, owned memory layer for AI tools and agents. It stores thou
 | `n8n/` | MCP Server Trigger and sub-workflow exports |
 | `ingester/` | Consume-folder ingester, failure-alert workflow and tests |
 | `k8s/` | Ingester, Tika, Gotenberg, and drop-folder PV/PVC manifests |
-| `rsi/` | Retrieval-feedback reporting query and tests |
+| `rsi/` | Retrieval-feedback report, eval runner, defect review workflow, detector monitoring, and tests |
 | `docs/` | Setup guide and the n8n deployment pattern |
 
 ## Build Order

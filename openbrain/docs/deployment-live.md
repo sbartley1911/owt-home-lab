@@ -29,6 +29,7 @@ On a CloudNativePG (CNPG) cluster with PostgreSQL + pgvector:
   | `0005_supersession.sql` | supersession marks, provenance, capture guard; retrieval hides superseded rows |
   | `0006_retrieval_feedback.sql` | `rsi` schema: logged retrieval wrappers and usefulness feedback |
   | `0007_reports_and_email_delivery.sql` | `reports` (ingest failures) and the alert delivery ledger |
+  | `0008_rsi_defect_detector.sql` | `rsi` document defect review: scan and review tables, candidate and scan functions |
 
   Numbers 0003–0004 are intentionally unused here; the runner doesn't need
   contiguous numbers.
@@ -113,6 +114,15 @@ The consume ingester writes an `ingest-failure` row to `public.reports` whenever
 file lands in `failed/`. A scheduled n8n workflow
 (`ingester/workflow.ingest-failure-alerts.json`) claims unnotified rows under a
 lease and emails one digest. See [`../ingester/README.md`](../ingester/README.md).
+
+## Document defect review
+
+A daily n8n workflow (`rsi/workflow.defect-detector.json`) runs
+`rsi.scan_defects()` and queues ingested documents worth a human look: ones with
+several fragment-sized chunks, chunks with extraction mojibake, or no search result
+in 14 days. It only flags; dispositions are yours. Optional Prometheus alerts
+(`rsi/monitoring/`) cover a failed, overdue or unmonitored run. See
+[`../rsi/README.md`](../rsi/README.md).
 
 ## Notes
 
