@@ -1,0 +1,65 @@
+# Brings openbrain/ on main up to date with Nate's upstream repo
+# (NateBJones-Projects/OB1). This replaces the "Sync fork" button that was
+# lost when OB1 moved from a GitHub fork into a folder of this repo.
+#
+# To sync: Actions tab -> "Sync OB1 into openbrain" -> Run workflow.
+# It also runs once whenever this file changes, so merging it performs the
+# first sync.
+#
+# How it works: openbrain/ is tracked as a git subtree. The first run replaces
+# the plain copy with a subtree of the same content. Later runs merge in
+# whatever upstream has added since. A run that hits a merge conflict fails
+# and pushes nothing.
+name: Sync OB1 into openbrain
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sync-ob1.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-ob1
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main with full history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync openbrain/ from upstream
+        env:
+          UPSTREAM: https://github.com/NateBJones-Projects/OB1
+          PREFIX: openbrain
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          before=$(git rev-parse HEAD)
+
+          if git log --grep="^git-subtree-dir: ${PREFIX}/*\$" -1 --format=%H | grep -q .; then
+            echo "Subtree already set up. Pulling upstream changes."
+            git subtree pull --prefix="${PREFIX}" "${UPSTREAM}" main --squash \
+              -m "Sync OB1 into ${PREFIX}/"
+          else
+            echo "First run. Replacing the plain copy with a subtree."
+            git rm -r -q "${PREFIX}"
+            git commit -q -m "Remove plain copy of OB1 before re-adding as subtree"
+            git subtree add --prefix="${PREFIX}" "${UPSTREAM}" main --squash
+          fi
+
+          if [ "$(git rev-parse HEAD)" = "${before}" ]; then
+            echo "Already up to date. Nothing to push."
+          else
+            git push origin HEAD:main
+          fi
