@@ -48,3 +48,7 @@ databases. Never point these tests at a database you care about.
   `openbrain_app`, `openbrain_mcp_ro`, `openbrain_mcp_rw` exist. Edit that list if
   your MCP credentials connect as another role.
 - `0007` is idempotent and safe to apply where a `reports` table already exists.
+- `0008` needs PostgreSQL 15 or later (`regexp_count`). It grants
+  `rsi.scan_defects()` execution to `openbrain` if that role exists; edit the list if
+  your scheduler connects as another role. Its tables are additive and it never
+  changes brain content. See [`../rsi/README.md`](../rsi/README.md).

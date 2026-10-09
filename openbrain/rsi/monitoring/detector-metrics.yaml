@@ -1,0 +1,38 @@
+# CNPG custom-queries ConfigMap for the defect detector's health view.
+# Create it in the namespace of the CNPG cluster that hosts n8n's database, then
+# add it to that cluster's spec.monitoring.customQueriesConfigMap list next to
+# the default queries, for example:
+#   monitoring:
+#     enablePodMonitor: true
+#     customQueriesConfigMap:
+#       - name: cnpg-default-monitoring
+#         key: queries
+#       - name: rsi-detector-monitoring
+#         key: queries
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rsi-detector-monitoring
+  namespace: n8n
+  labels:
+    cnpg.io/reload: ""
+data:
+  queries: |
+    rsi_detector:
+      primary: true
+      target_databases:
+        - n8n
+      query: SELECT * FROM rsi_monitoring.detector_health
+      metrics:
+        - workflow_id:
+            usage: LABEL
+            description: Defect detector workflow identifier
+        - latest_failed:
+            usage: GAUGE
+            description: One when the latest completed automatic detector execution failed
+        - last_success_timestamp:
+            usage: GAUGE
+            description: Unix timestamp of the latest successful automatic detector execution
+        - last_failure_timestamp:
+            usage: GAUGE
+            description: Unix timestamp of the latest failed automatic detector execution

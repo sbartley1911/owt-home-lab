@@ -1,0 +1,64 @@
+{
+  "name": "OpenBrain RSI: daily defect review",
+  "active": false,
+  "nodes": [
+    {
+      "id": "rsi3-schedule",
+      "name": "Daily at 06:15",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 6 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "rsi3-scan",
+      "name": "Scan into review queue",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET statement_timeout = '90s'; SELECT rsi.scan_defects() AS scan_id;",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Daily at 06:15": {
+      "main": [
+        [
+          {
+            "node": "Scan into review queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC"
+  }
+}
