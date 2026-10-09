@@ -14,7 +14,7 @@ before(async()=>{
   await db.exec(fs.readFileSync(new URL('../../db/migrations/0008_rsi_defect_detector.sql',import.meta.url),'utf8'));
   let seq=0;
   for(const [doc,bodies,status,age] of [
-    ['pfsense',['heading\n\na','heading\n\nb','heading\n\nc'],'active',20],
+    ['sample',['heading\n\na','heading\n\nb','heading\n\nc'],'active',20],
     ['good',['normal prose '.repeat(30)],'active',20],
     ['retired',['bad bad bad'],'superseded',20],
     ['fresh',['normal prose '.repeat(30)],'active',1],
@@ -39,9 +39,9 @@ test('coverage gate, grace period, retired rows and semantic-only observations',
   await query("INSERT INTO rsi.retrieval_results VALUES ('q1',$1)",[good]);
   // recent_entries must not count as successful semantic retrieval.
   await query("INSERT INTO rsi.retrieval_requests VALUES ('recent',$1,'recent_entries','results')",[asOf]);
-  await db.exec("INSERT INTO rsi.retrieval_results SELECT 'recent',id FROM brain_entries WHERE source_ref='pfsense#0'");
+  await db.exec("INSERT INTO rsi.retrieval_results SELECT 'recent',id FROM brain_entries WHERE source_ref='sample#0'");
   const rows=await query('SELECT * FROM rsi.defect_candidates($1)',[asOf]);
-  assert.deepEqual(rows.filter(r=>r.reason==='not_observed').map(r=>r.doc_ref).sort(),['garbled','pfsense']);
+  assert.deepEqual(rows.filter(r=>r.reason==='not_observed').map(r=>r.doc_ref).sort(),['garbled','sample']);
   assert.equal(rows.find(r=>r.reason==='short_chunks').evidence.affected_chunks,3);
   assert.ok(rows.every(r=>!JSON.stringify(r.evidence).includes('normal prose')));
 });
