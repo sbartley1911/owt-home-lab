@@ -1,0 +1,82 @@
+---
+# Gotenberg — stateless document conversion (LibreOffice + Chromium).
+# Used by the consume ingester as a FALLBACK: if Tika returns no text for an
+# Office/odd file, the ingester converts it to PDF via Gotenberg's LibreOffice
+# route and re-extracts through Tika (which then OCRs if needed). Tika handles
+# Office text directly and better for the common case, so this rarely triggers,
+# but it rescues malformed or unusual files.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gotenberg
+  namespace: openbrain
+  labels:
+    app: gotenberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gotenberg
+  template:
+    metadata:
+      labels:
+        app: gotenberg
+    spec:
+      # Singleton; reschedule ~1.5 min after node loss instead of the default ~6.
+      tolerations:
+        - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+        - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+      containers:
+        - name: gotenberg
+          image: gotenberg/gotenberg:8
+          imagePullPolicy: IfNotPresent
+          # restricted Pod Security Standard. uid 1001 = the image's gotenberg user.
+          # LibreOffice conversion verified working under RuntimeDefault seccomp
+          # + drop-ALL (real txt->pdf test on the hardened pod).
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          args:
+            - gotenberg
+            - --api-timeout=120s
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gotenberg
+  namespace: openbrain
+  labels:
+    app: gotenberg
+spec:
+  selector:
+    app: gotenberg
+  ports:
+    - port: 3000
+      targetPort: 3000

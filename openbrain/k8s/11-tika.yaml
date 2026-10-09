@@ -1,0 +1,77 @@
+---
+# Apache Tika (full) — text extraction + OCR for the consume ingester.
+# The `-full` image bundles Tesseract, so it OCRs scanned PDFs and images
+# on-cluster (no per-page cloud cost, no document images leaving the cluster).
+# Extracts text from PDF, Office (modern + legacy), OpenDocument, RTF, HTML,
+# images, email, and more via one REST endpoint (PUT /tika, Accept: text/plain).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tika
+  namespace: openbrain
+  labels:
+    app: tika
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tika
+  template:
+    metadata:
+      labels:
+        app: tika
+    spec:
+      # Singleton; reschedule ~1.5 min after node loss instead of the default ~6.
+      tolerations:
+        - { key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+        - { key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 30 }
+      containers:
+        - name: tika
+          image: apache/tika:latest-full
+          imagePullPolicy: IfNotPresent
+          # restricted Pod Security Standard. uid 35002 = the image's own numeric
+          # USER, pinned so runAsNonRoot is kubelet-verifiable.
+          securityContext:
+            runAsUser: 35002
+            runAsGroup: 35002
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 9998
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi           # OCR of large scans can spike; JVM + Tesseract
+          readinessProbe:
+            httpGet:
+              path: /version
+              port: 9998
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /version
+              port: 9998
+            initialDelaySeconds: 90
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tika
+  namespace: openbrain
+  labels:
+    app: tika
+spec:
+  selector:
+    app: tika
+  ports:
+    - port: 9998
+      targetPort: 9998

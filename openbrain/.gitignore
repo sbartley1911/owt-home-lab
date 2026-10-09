@@ -1,4 +1,5 @@
 node_modules/
+dist/
 .DS_Store
 .planning/
 supabase/
@@ -12,18 +13,36 @@ supabase/
 __pycache__/
 *.pyc
 
-# Credentials & runtime state
-.env
-.env.local
-.env.*.local
-credentials.json
-token.json
-gmail-sync-log.json
-sync-log.json
-
 # Build artifacts
+*.log
 deno.lock
 docs/walkthroughs/*/public/
 docs/assets/agent-memory/promotional/generated-backgrounds/**/result.json
 docs/assets/agent-memory/screenshots/**/.chrome-*/
 integrations/openclaw-agent-memory/dist/
+
+# Secrets and passwords. .env.example is the only env file that belongs in git.
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+credentials.json
+credentials*.json
+token.json
+*.token
+secrets.json
+secrets/
+id_rsa
+id_ed25519
+id_ecdsa
+password.txt
+passwords.txt
+*.password
+gmail-sync-log.json
+sync-log.json

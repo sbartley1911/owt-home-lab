@@ -1,0 +1,118 @@
+{
+  "name": "OpenBrain: capture",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "content",
+              "type": "string"
+            },
+            {
+              "name": "source",
+              "type": "string"
+            },
+            {
+              "name": "source_ref",
+              "type": "string"
+            },
+            {
+              "name": "entry_type",
+              "type": "string"
+            },
+            {
+              "name": "metadata",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "placeholder-01",
+      "name": "In",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"text-embedding-3-small\", input: $json.content }) }}",
+        "options": {}
+      },
+      "id": "placeholder-02",
+      "name": "Embed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        260,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI (OpenBrain)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into brain_entries (content, embedding, source, source_ref, entry_type, metadata) values ($1, $2::vector, $3, nullif($4,''), coalesce(nullif($5,''),'thought'), coalesce(nullif($6,'')::jsonb,'{}'::jsonb)) on conflict on constraint brain_entries_source_unique do update set content = excluded.content, embedding = excluded.embedding, entry_type = excluded.entry_type, metadata = excluded.metadata returning id, captured_at",
+        "options": {
+          "queryReplacement": "={{ [$('In').item.json.content, '[' + $json.data[0].embedding.join(',') + ']', ($('In').item.json.source || 'mcp'), ($('In').item.json.source_ref || ''), ($('In').item.json.entry_type || ''), ($('In').item.json.metadata || '')] }}"
+        }
+      },
+      "id": "placeholder-03",
+      "name": "Insert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        520,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "In": {
+      "main": [
+        [
+          {
+            "node": "Embed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed": {
+      "main": [
+        [
+          {
+            "node": "Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

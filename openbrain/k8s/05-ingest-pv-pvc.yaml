@@ -1,0 +1,42 @@
+---
+# Static PV/PVC for the consume drop folder (an NFS export). The ingester
+# (10-consume-ingester.yaml) mounts PVC `ingest`.
+#
+# A static CSI pair instead of an inline `nfs:` volume because the `restricted`
+# Pod Security Standard bans inline nfs volumes. If another namespace (say, your
+# automation platform) also needs the folder, give it its own PV+PVC pair on the
+# same export: a PV binds exactly one namespaced PVC.
+#
+# Requires the NFS CSI driver (csi-driver-nfs). Replace <nfs-server> and
+# <export-path>, and point storageClassName at your own class (or leave it as a
+# static-binding label).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ingest-openbrain
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-csi-retain
+  mountOptions: ["nfsvers=4.1", "hard", "timeo=600", "retrans=3", "nconnect=4"]
+  csi:
+    driver: nfs.csi.k8s.io
+    volumeHandle: <nfs-server>#<export-path>#ingest-openbrain#
+    volumeAttributes:
+      server: <nfs-server>
+      share: <export-path>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ingest
+  namespace: openbrain
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: nfs-csi-retain
+  volumeName: ingest-openbrain
+  resources:
+    requests:
+      storage: 50Gi

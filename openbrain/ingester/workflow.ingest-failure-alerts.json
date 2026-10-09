@@ -1,0 +1,233 @@
+{
+  "name": "OpenBrain: ingest failure alerts",
+  "nodes": [
+    {
+      "id": "placeholder-01",
+      "name": "Every five minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "placeholder-02",
+      "name": "Claim failure reports",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        224,
+        96
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Upsert serializes concurrent claims even when the delivery row does not exist.\n-- Only the winning lease is returned. Expired, unacknowledged sends are retried.\nWITH batch AS (\n    SELECT r.id FROM public.reports r\n    LEFT JOIN public.report_email_delivery d ON d.report_id = r.id\n    WHERE r.report_type = 'ingest-failure' AND d.sent_at IS NULL\n      AND (d.lease_until IS NULL OR d.lease_until < now())\n    ORDER BY r.created_at, r.id LIMIT 50\n), claimed AS (\n    INSERT INTO public.report_email_delivery (report_id, lease_token, lease_until)\n    SELECT id, gen_random_uuid(), now() + interval '10 minutes' FROM batch\n    ON CONFLICT (report_id) DO UPDATE\n       SET lease_token = EXCLUDED.lease_token,\n           lease_until = EXCLUDED.lease_until,\n           attempts = report_email_delivery.attempts + 1\n     WHERE report_email_delivery.sent_at IS NULL\n       AND report_email_delivery.lease_until < now()\n    RETURNING report_id, lease_token\n)\nSELECT coalesce(jsonb_agg(jsonb_build_object(\n    'id', c.report_id, 'lease_token', c.lease_token,\n    'created_at', r.created_at, 'synthetic', coalesce(r.meta->>'synthetic', 'false')\n) ORDER BY r.created_at, r.id), '[]'::jsonb) AS reports\nFROM claimed c JOIN public.reports r ON r.id = c.report_id;\n",
+        "options": {
+          "connectionTimeout": 15
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "placeholder-03",
+      "name": "Prepare digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        96
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst state = $getWorkflowStaticData('global');\nif (data.error || !Array.isArray(data.reports)) {\n  if (Date.now() - (state.lastMonitorAlert || 0) < 3600000) return [];\n  return [{json:{monitorError:true,reports:[],subject:'OpenBrain ingest alert monitor cannot read reports',text:'The ingestion alert monitor could not read or claim failure reports. Ingest failures may be unreported. Check the OpenBrain database and this workflow. No raw database error or credential is included in this email.'}}];\n}\nif (!data.reports.length) return [];\nconst reports = data.reports;\nconst synthetic = reports.every(r=>r.synthetic==='true');\nreturn [{json:{monitorError:false,reports,subject:(synthetic?'[TEST] ':'')+'OpenBrain: '+reports.length+' unnotified ingestion failure(s)',text:'OpenBrain has ingestion failures requiring review. This digest includes previously unnotified history; timestamps below distinguish old failures from new ones.\\n\\n'+reports.map(r=>r.created_at+' | report '+r.id+(r.synthetic==='true'?' | synthetic verification':'')).join('\\n')+'\\n\\nReview openbrain.public.reports by report ID and the consume failed/ directory. No document contents, file names, tracebacks, or secrets are included in this email.'}}];"
+      }
+    },
+    {
+      "id": "placeholder-04",
+      "name": "Email digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        672,
+        96
+      ],
+      "parameters": {
+        "operation": "send",
+        "fromEmail": "alerts@example.com",
+        "toEmail": "alerts@example.com",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_SMTP_CREDENTIAL_ID",
+          "name": "Alerts SMTP"
+        }
+      },
+      "webhookId": "placeholder-05"
+    },
+    {
+      "id": "placeholder-06",
+      "name": "Verify SMTP acceptance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "jsCode": "const smtp = $input.first().json;\nconst prepared = $('Prepare digest').first().json;\nconst accepted = (smtp.accepted || []).map(v=>String(v).toLowerCase());\nif (!accepted.includes(\"alerts@example.com\") || !smtp.messageId) throw new Error('SMTP did not confirm acceptance; reports remain pending');\nconst state = $getWorkflowStaticData('global');\nif (prepared.monitorError) { state.lastMonitorAlert=Date.now(); return []; }\nstate.lastMonitorAlert=0;\nreturn [{json:{reports:prepared.reports,messageId:smtp.messageId}}];"
+      }
+    },
+    {
+      "id": "placeholder-07",
+      "name": "Acknowledge delivered reports",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1120,
+        96
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Parameters: JSON array of {id, lease_token}, SMTP message ID.\n-- An old worker cannot acknowledge another worker's replacement lease.\nWITH acknowledged AS (\n    UPDATE public.report_email_delivery d\n       SET sent_at = now(), smtp_message_id = $2\n      FROM jsonb_to_recordset($1::jsonb) AS sent(id uuid, lease_token uuid)\n     WHERE d.report_id = sent.id AND d.lease_token = sent.lease_token\n       AND d.sent_at IS NULL\n    RETURNING d.report_id\n)\nSELECT count(*)::integer AS acknowledged FROM acknowledged;\n",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.reports), $json.messageId] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "OpenBrain DB"
+        }
+      }
+    },
+    {
+      "id": "placeholder-08",
+      "name": "Verify acknowledgement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        96
+      ],
+      "parameters": {
+        "jsCode": "const expected = $('Verify SMTP acceptance').first().json.reports.length;\nif ($input.first().json.acknowledged !== expected) throw new Error('Delivery acknowledgement count mismatch; inspect leases before retrying');\nreturn [{json:{acknowledged:expected}}];"
+      }
+    },
+    {
+      "id": "placeholder-09",
+      "name": "Manual verification",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Every five minutes": {
+      "main": [
+        [
+          {
+            "node": "Claim failure reports",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim failure reports": {
+      "main": [
+        [
+          {
+            "node": "Prepare digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare digest": {
+      "main": [
+        [
+          {
+            "node": "Email digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email digest": {
+      "main": [
+        [
+          {
+            "node": "Verify SMTP acceptance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify SMTP acceptance": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge delivered reports",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acknowledge delivered reports": {
+      "main": [
+        [
+          {
+            "node": "Verify acknowledgement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual verification": {
+      "main": [
+        [
+          {
+            "node": "Claim failure reports",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 120
+  }
+}
