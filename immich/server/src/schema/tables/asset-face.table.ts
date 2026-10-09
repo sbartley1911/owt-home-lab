@@ -1,0 +1,89 @@
+import {
+  AfterDeleteTrigger,
+  Column,
+  DeleteDateColumn,
+  ForeignKeyColumn,
+  type Generated,
+  Index,
+  PrimaryGeneratedColumn,
+  Table,
+  Timestamp,
+  UpdateDateColumn,
+} from '@immich/sql-tools';
+import { UpdateIdColumn, UpdatedAtTrigger } from 'src/decorators.js';
+import { SourceType } from 'src/enum.js';
+import { asset_face_source_type } from 'src/schema/enums.js';
+import { asset_face_audit } from 'src/schema/functions.js';
+import { AssetTable } from 'src/schema/tables/asset.table.js';
+import { PersonGroupTable } from 'src/schema/tables/person-group.table.js';
+
+@Table({ name: 'asset_face' })
+@UpdatedAtTrigger('asset_face_updatedAt')
+@AfterDeleteTrigger({
+  scope: 'statement',
+  function: asset_face_audit,
+  referencingOldTableAs: 'old',
+  when: 'pg_trigger_depth() = 0',
+})
+// schemaFromDatabase does not preserve column order
+@Index({ name: 'asset_face_assetId_personGroupId_idx', columns: ['assetId', 'personGroupId'] })
+@Index({
+  name: 'asset_face_personGroupId_assetId_notDeleted_isVisible_idx',
+  columns: ['personGroupId', 'assetId'],
+  where: '"deletedAt" IS NULL AND "isVisible" IS TRUE',
+})
+@Index({ columns: ['personGroupId', 'assetId'] })
+export class AssetFaceTable {
+  @PrimaryGeneratedColumn()
+  id!: Generated<string>;
+
+  @ForeignKeyColumn(() => AssetTable, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    // [assetId, personGroupId] is the PK constraint
+    index: false,
+  })
+  assetId!: string;
+
+  @ForeignKeyColumn(() => PersonGroupTable, {
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE',
+    nullable: true,
+    // [personGroupId, assetId] makes this redundant
+    index: false,
+  })
+  personGroupId!: string | null;
+
+  @Column({ default: 0, type: 'integer' })
+  imageWidth!: Generated<number>;
+
+  @Column({ default: 0, type: 'integer' })
+  imageHeight!: Generated<number>;
+
+  @Column({ default: 0, type: 'integer' })
+  boundingBoxX1!: Generated<number>;
+
+  @Column({ default: 0, type: 'integer' })
+  boundingBoxY1!: Generated<number>;
+
+  @Column({ default: 0, type: 'integer' })
+  boundingBoxX2!: Generated<number>;
+
+  @Column({ default: 0, type: 'integer' })
+  boundingBoxY2!: Generated<number>;
+
+  @Column({ default: SourceType.MachineLearning, enum: asset_face_source_type })
+  sourceType!: Generated<SourceType>;
+
+  @DeleteDateColumn()
+  deletedAt!: Timestamp | null;
+
+  @UpdateDateColumn()
+  updatedAt!: Generated<Timestamp>;
+
+  @UpdateIdColumn()
+  updateId!: Generated<string>;
+
+  @Column({ type: 'boolean', default: true })
+  isVisible!: Generated<boolean>;
+}

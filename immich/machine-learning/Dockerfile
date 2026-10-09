@@ -1,0 +1,207 @@
+ARG DEVICE=cpu
+
+FROM python:3.13-slim-trixie@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b AS builder-cpu
+
+FROM python:3.13-slim-trixie@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b AS builder-openvino
+
+# renovate: datasource=github-releases depName=microsoft/onnxruntime
+ARG ONNXRUNTIME_VERSION="v1.30.0"
+ENV VIRTUAL_ENV=/opt/venv \
+    OpenVINO_DIR=/opt/venv/lib/python3.13/site-packages/openvino/cmake \
+    CCACHE_DIR=/ccache
+
+RUN apt-get update && apt-get install -y --no-install-recommends g++ make patch git cmake ccache patchelf
+RUN git clone --depth 1 --branch "${ONNXRUNTIME_VERSION}" https://github.com/microsoft/onnxruntime /code/onnxruntime
+
+COPY --from=ghcr.io/astral-sh/uv:0.8.15@sha256:a5727064a0de127bdb7c9d3c1383f3a9ac307d9f2d8a391edc7896c54289ced0 /uv /uvx /bin/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --extra openvino --group onnxruntime-openvino-build --no-dev --no-editable --no-install-project --no-progress --active --link-mode copy
+
+WORKDIR /code/onnxruntime
+# Note: the `parallel` setting uses a substantial amount of RAM
+RUN --mount=type=cache,target=/ccache \
+    /opt/venv/bin/python tools/ci_build/build.py \
+    --allow_running_as_root \
+    --build_dir build \
+    --config Release \
+    --build_wheel \
+    --update \
+    --build \
+    --parallel 16 \
+    --cmake_extra_defines onnxruntime_BUILD_UNIT_TESTS=OFF \
+    --skip_tests \
+    --use_openvino CPU \
+    --use_cache \
+    --compile_no_warning_as_error
+
+# bundle openvino into the wheel as the published one does, so it is what the EP loads beside it
+WORKDIR /code/onnxruntime/build/Release/dist
+RUN /opt/venv/bin/wheel unpack onnxruntime_openvino-*.whl && \
+    capi=$(echo onnxruntime_openvino-*/onnxruntime/capi) && \
+    cp /opt/venv/lib/python3.13/site-packages/openvino/libs/* "$capi" && \
+    mv "$capi"/libopenvino_c.so.* "$capi/libopenvino_c.so" && \
+    patchelf --set-rpath '$ORIGIN' --force-rpath "$capi/libonnxruntime_providers_openvino.so" && \
+    /opt/venv/bin/wheel pack onnxruntime_openvino-*/ -d /opt
+
+FROM python:3.13-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26 AS builder-cuda
+
+FROM python:3.13-trixie@sha256:82c46c08c991d3d3ff10476ac5e386c2c28f27bbd3985a02c5e39fe99ab272eb AS builder-armnn
+
+# renovate: datasource=github-releases depName=ARM-software/armnn
+ARG ARMNN_VERSION="v26.07"
+
+ENV ARMNN_PATH=/opt/armnn
+COPY ann /opt/ann
+RUN mkdir /opt/armnn && \
+    curl -SL "https://github.com/ARM-software/armnn/releases/download/${ARMNN_VERSION}/ArmNN-linux-aarch64.tar.gz" | tar -zx -C /opt/armnn && \
+    cd /opt/ann && \
+    sh build.sh
+
+FROM python:3.12-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS builder-rknn
+
+# Warning: 25GiB+ disk space required to pull this image
+# TODO: find a way to reduce the image size
+FROM rocm/dev-ubuntu-24.04:7.2-complete@sha256:86e11093b4a7ec2a79b1b6701d10e840a6994f21c7e05929b51eb9be361c683a AS builder-rocm
+
+FROM builder-${DEVICE} AS builder
+
+ARG DEVICE
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv
+
+RUN apt-get update && apt-get install -y --no-install-recommends g++ git
+
+COPY --from=ghcr.io/astral-sh/uv:0.8.15@sha256:a5727064a0de127bdb7c9d3c1383f3a9ac307d9f2d8a391edc7896c54289ced0 /uv /uvx /bin/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --extra ${DEVICE} --no-dev --no-editable --no-install-project --compile-bytecode --no-progress --active --link-mode copy && \
+    if [ "$DEVICE" = "openvino" ]; then uv pip install --no-deps /opt/onnxruntime_openvino-*.whl; fi
+
+FROM python:3.13-slim-trixie@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b AS prod-cpu
+
+ENV MACHINE_LEARNING_MODEL_ARENA=false
+
+FROM python:3.13-slim-trixie@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b AS prod-openvino
+
+RUN --mount=type=bind,source=scripts/install-intel-runtime.sh,target=/tmp/install-intel-runtime.sh \
+    apt-get update && \
+    apt-get install --no-install-recommends -yqq ocl-icd-libopencl1 curl && \
+    /tmp/install-intel-runtime.sh && \
+    apt-get remove curl -yqq && \
+    rm -rf /var/lib/apt/lists/*
+
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04@sha256:94c1577b2cd9dd6c0312dc04dff9cb2fdce2b268018abc3d7c2dbcacf1155000 AS prod-cuda
+
+ENV MACHINE_LEARNING_MODEL_ARENA=false
+
+RUN apt-get update && \
+    # Pascal support was dropped in 9.11
+    apt-get install --no-install-recommends -yqq libcudnn9-cuda-12=9.10.2.21-1 tzdata && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder-cuda /usr/local/bin/python3 /usr/local/bin/python3
+COPY --from=builder-cuda /usr/local/lib/python3.13 /usr/local/lib/python3.13
+COPY --from=builder-cuda /usr/local/lib/libpython3.13.so /usr/local/lib/libpython3.13.so
+
+FROM rocm/dev-ubuntu-24.04:7.2-complete@sha256:86e11093b4a7ec2a79b1b6701d10e840a6994f21c7e05929b51eb9be361c683a AS prod-rocm
+
+RUN apt-get update && apt-get install --no-install-recommends -yqq migraphx miopen-hip && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+FROM prod-cpu AS prod-armnn
+
+ENV LD_LIBRARY_PATH=/opt/armnn \
+    MACHINE_LEARNING_MODEL_ARENA=false
+
+RUN apt-get update && apt-get install -y --no-install-recommends ocl-icd-libopencl1 mesa-opencl-icd libgomp1 && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir --parents /etc/OpenCL/vendors && \
+    echo "/usr/lib/libmali.so" > /etc/OpenCL/vendors/mali.icd && \
+    mkdir /opt/armnn
+
+COPY --from=builder-armnn \
+    /opt/armnn/libarmnn.so.?? \
+    /opt/armnn/libarmnnDeserializer.so.?? \
+    /opt/armnn/libprotobuf.so.?.??.?.? \
+    /opt/ann/libann.s[o] \
+    /opt/ann/build.sh \
+    /opt/armnn/
+
+FROM python:3.12-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS prod-rknn
+
+# renovate: datasource=github-tags depName=airockchip/rknn-toolkit2
+ARG RKNN_TOOLKIT_VERSION="v2.3.0"
+
+ENV MACHINE_LEARNING_MODEL_ARENA=false
+
+ADD --chmod=644 --checksum=sha256:73993ed4b440460825f21611731564503cc1d5a0c123746477da6cd574f34885 "https://github.com/airockchip/rknn-toolkit2/raw/refs/tags/${RKNN_TOOLKIT_VERSION}/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" /usr/lib/
+
+FROM python:3.13-slim-trixie@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b AS mimalloc
+RUN echo "deb http://deb.debian.org/debian trixie-backports main" > /etc/apt/sources.list.d/backports.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends libmimalloc3/trixie-backports && \
+    cp /usr/lib/*-linux-gnu/libmimalloc.so.3 /libmimalloc.so
+
+FROM prod-${DEVICE} AS prod
+
+ARG DEVICE
+
+COPY --from=mimalloc /libmimalloc.so /usr/lib/libmimalloc.so
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tini ccache libgomp1 && \
+    apt-get autoremove -yqq && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    case "$DEVICE" in openvino|rocm);; *) echo /usr/lib/libmimalloc.so > /etc/ld.so.preload;; esac
+
+WORKDIR /usr/src
+ENV TRANSFORMERS_CACHE=/cache \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONPATH=/usr/src \
+    DEVICE=${DEVICE} \
+    VIRTUAL_ENV=/opt/venv \
+    MACHINE_LEARNING_CACHE_FOLDER=/cache
+
+# prevent core dumps
+RUN echo "hard core 0" >> /etc/security/limits.conf && \
+    echo "fs.suid_dumpable 0" >> /etc/sysctl.conf && \
+    echo 'ulimit -S -c 0 > /dev/null 2>&1' >> /etc/profile
+
+COPY --from=builder /opt/venv /opt/venv
+COPY scripts/healthcheck.py .
+COPY immich_ml immich_ml
+
+ARG BUILD_ID
+ARG BUILD_IMAGE
+ARG BUILD_SOURCE_REF
+ARG BUILD_SOURCE_COMMIT
+
+ENV IMMICH_BUILD=${BUILD_ID}
+ENV IMMICH_BUILD_URL=https://github.com/immich-app/immich/actions/runs/${BUILD_ID}
+ENV IMMICH_BUILD_IMAGE=${BUILD_IMAGE}
+ENV IMMICH_BUILD_IMAGE_URL=https://github.com/immich-app/immich/pkgs/container/immich-machine-learning
+ENV IMMICH_REPOSITORY=immich-app/immich
+ENV IMMICH_REPOSITORY_URL=https://github.com/immich-app/immich
+ENV IMMICH_SOURCE_REF=${BUILD_SOURCE_REF}
+ENV IMMICH_SOURCE_COMMIT=${BUILD_SOURCE_COMMIT}
+ENV IMMICH_SOURCE_URL=https://github.com/immich-app/immich/commit/${BUILD_SOURCE_COMMIT}
+
+# store huggingface in /cache subfolder to enable rootless deployment with a single volume
+ENV HF_HOME=/cache/hf-cache
+
+ENV CUDA_CACHE_PATH=/cache/jit/cuda \
+    AMD_COMGR_CACHE_DIR=/cache/jit/comgr \
+    NEO_CACHE_DIR=/cache/jit/neo
+
+ENTRYPOINT ["tini", "--"]
+CMD ["python", "-m", "immich_ml"]
+
+HEALTHCHECK CMD python3 healthcheck.py
