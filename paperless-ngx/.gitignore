@@ -1,5 +1,6 @@
 # Environment variables with secrets
 docker-compose.env
+docker-compose.env.example
 .env
 
 # Docker volumes (local storage)

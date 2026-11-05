@@ -1,116 +1,150 @@
-# Docker Compose file for running paperless from the docker container registry.
-# This file contains everything paperless needs to run.
-# Paperless supports amd64, arm and arm64 hardware.
-#
-# All compose files of paperless configure paperless in the following way:
-#
-# - Paperless is (re)started on system boot, if it was running before shutdown.
-# - Docker volumes for storing data are managed by Docker.
-# - Folders for importing and exporting files are created in the same directory
-#   as this file and mounted to the correct folders inside the container.
-# - Paperless listens on port 8000.
-#
-# In addition to that, this Docker Compose file adds the following optional
-# configurations:
-#
-# - Instead of SQLite (default), PostgreSQL is used as the database server.
-# - Apache Tika and Gotenberg servers are started with paperless and paperless
-#   is configured to use these services. These provide support for consuming
-#   Office documents (Word, Excel, PowerPoint and their LibreOffice counter-
-#   parts).
-#
-# To install and update paperless with this file, do the following:
-#
-# - Copy this file as 'docker-compose.yml' and the files 'docker-compose.env'
-#   and '.env' into a folder.
-# - Run 'docker compose pull'.
-# - Run 'docker compose up -d'.
-#
-# For more extensive installation and update instructions, refer to the
-# documentation.
 services:
   broker:
-    image: docker.io/library/redis:8
+    image: dhi.io/redis:${REDIS_VERSION:-8}
     container_name: paperless-redis
     restart: unless-stopped
+    # The DHI config runs protected-mode with no password, which refuses the webserver;
+    # a password is required instead. Use a URL-safe value (it is also in PAPERLESS_REDIS).
+    command:
+      - "redis-server"
+      - "/etc/redis/redis.conf"
+      - "--requirepass"
+      - "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"
+    # dhi.io/redis runs as non-root and cannot read the old redis:8 volume (dump.rdb owned
+    # by uid 999), so the broker gets a new volume. It only holds the task queue.
     volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  db:
-    image: docker.io/library/postgres:18
-    container_name: paperless-postgres
-    restart: unless-stopped
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: paperless
-      POSTGRES_USER: paperless
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U paperless"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-  webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:latest
-    container_name: paperless-webserver
-    restart: unless-stopped
-    depends_on:
-      - db
-      - broker
-      - gotenberg
-      - tika
-    ports:
-      - "8000:8000"
-    volumes:
-      - /mnt/nfs/appdata/paperless-ngx/data:/usr/src/paperless/data
-      - /mnt/nfs/appdata/paperless-ngx/media:/usr/src/paperless/media
-      - /mnt/nfs/appdata/paperless-ngx/export:/usr/src/paperless/export
-      - /mnt/nfs/appdata/paperless-ngx/consume:/usr/src/paperless/consume
-    env_file: docker-compose.env
-    environment:
-      PAPERLESS_REDIS: redis://broker:6379
-      PAPERLESS_DBHOST: db
-      PAPERLESS_DBENGINE: postgresql
-      PAPERLESS_TIKA_ENABLED: 1
-      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
-      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      - paperless_broker_data:/data
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - paperless-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   gotenberg:
     image: docker.io/gotenberg/gotenberg:8.27
     container_name: paperless-gotenberg
     restart: unless-stopped
-    # The gotenberg chromium route is used to convert .eml files. We do not
-    # want to allow external content like tracking pixels or even javascript.
     command:
       - "gotenberg"
       - "--chromium-disable-javascript=true"
       - "--chromium-allow-list=file:///tmp/.*"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - paperless-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   tika:
-    image: docker.io/apache/tika:latest
+    image: docker.io/apache/tika:${TIKA_VERSION:-3.3.1.0}
     container_name: paperless-tika
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9998/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - paperless-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:${PAPERLESS_VERSION:-3.4.2}
+    container_name: paperless-webserver
+    restart: unless-stopped
+    depends_on:
+      - broker
+      - gotenberg
+      - tika
+    ports:
+      - "${PAPERLESS_BIND_IP:-127.0.0.1}:${PAPERLESS_PORT:-8000}:8000"
+    volumes:
+      - paperless_data:/usr/src/paperless/data
+      - ${MEDIA_PATH:-/mnt/nfs/appdata/paperless-ngx/media}:/usr/src/paperless/media
+      - ${EXPORT_PATH:-/mnt/nfs/appdata/paperless-ngx/export}:/usr/src/paperless/export
+      - ${CONSUME_PATH:-/mnt/nfs/appdata/paperless-ngx/consume}:/usr/src/paperless/consume
+    environment:
+      USERMAP_UID: "9000"
+      USERMAP_GID: "0"
+      PAPERLESS_TIME_ZONE: America/Chicago
+      PAPERLESS_OCR_LANGUAGE: eng
+      PAPERLESS_REDIS: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@broker:6379
+      # Database: external Postgres (CloudNativePG or equivalent), reached on its service address.
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBHOST: ${PAPERLESS_DBHOST:?PAPERLESS_DBHOST must be set}
+      PAPERLESS_DBPORT: ${PAPERLESS_DBPORT:-5432}
+      PAPERLESS_DBNAME: paperless
+      PAPERLESS_DBUSER: paperless
+      PAPERLESS_DBPASS: ${DB_PASSWORD:?DB_PASSWORD must be set}
+      PAPERLESS_DB_OPTIONS: ${PAPERLESS_DB_OPTIONS:-sslmode=require}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY:?PAPERLESS_SECRET_KEY must be set}
+      PAPERLESS_ADMIN_USER: ${PAPERLESS_ADMIN_USER:-admin}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD:?PAPERLESS_ADMIN_PASSWORD must be set}
+      PAPERLESS_ADMIN_MAIL: ${PAPERLESS_ADMIN_MAIL:-}
+      PAPERLESS_URL: ${PAPERLESS_URL:-}
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
+      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+      PAPERLESS_FILENAME_FORMAT: '{{ document_type }}/{{ correspondent }}/{{ created_year }}/{{ created_year }}-{{ created_month }}-{{ created_day }}_{{ title|replace(" ", "_") }}'
+      PAPERLESS_FILENAME_FORMAT_REMOVE_NONE: "true"
+      PAPERLESS_CONSUMER_POLLING_INTERVAL: "10"
+      PAPERLESS_CONSUMER_RECURSIVE: "true"
+      PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS: "true"
+      PAPERLESS_CONSUMER_DELETE_DUPLICATES: "true"
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - paperless-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  paperless-network:
+    driver: bridge
 
 volumes:
-  postgres-data:
-  redis-data:
+  paperless_broker_data:
+  paperless_data:
