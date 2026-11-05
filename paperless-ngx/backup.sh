@@ -3,12 +3,16 @@
 #
 # Run on the Docker host. Writes into the NFS export share,
 # so the archive lands on the NAS rather than the local volume it is backing up.
+# Paperless runs as UID 9000; NAS root_squash rejects root, so every docker exec
+# here uses that UID. A write probe runs before the exporter.
 #
 #   ./backup.sh                 # snapshot, prune archives older than KEEP_DAYS
 #   KEEP_DAYS=90 ./backup.sh    # keep three months
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-paperless-webserver}"
+# Match compose USERMAP_UID (Paperless process user).
+PAPERLESS_UID="${PAPERLESS_UID:-9000}"
 # Path inside the container; bind-mounted to EXPORT_PATH on NFS.
 EXPORT_DIR="${EXPORT_DIR:-../export}"
 # Same directory as seen from the host, used for pruning.
@@ -23,7 +27,14 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   exit 1
 fi
 
-docker exec "$CONTAINER" python3 manage.py document_exporter \
+probe=".write-test-uid${PAPERLESS_UID}-$$"
+if ! docker exec -u "$PAPERLESS_UID" "$CONTAINER" \
+  python3 -c "p='${EXPORT_DIR}/${probe}'; open(p,'w').close(); import os; os.remove(p)"; then
+  echo "error: export dir is not writable as UID ${PAPERLESS_UID} (root_squash?); refusing exporter" >&2
+  exit 1
+fi
+
+docker exec -u "$PAPERLESS_UID" "$CONTAINER" python3 manage.py document_exporter \
   "$EXPORT_DIR" --zip --zip-name "$name" --no-progress-bar
 
 archive="${HOST_EXPORT}/${name}.zip"

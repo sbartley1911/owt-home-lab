@@ -43,12 +43,11 @@ for every archived document:
 {{ document_type }}/{{ correspondent }}/{{ created_year }}/{{ created_year }}-{{ created_month }}-{{ created_day }}_{{ title }}
 ```
 
-Example: `Credit Card Statement/Example Bank Business Platinum/2026/2026-07-01_July_Statement.pdf`
+Example: `Invoice/Example Vendor/2026/2026-07-01_July_Invoice.pdf`
 
-This mirrors the existing manual `Category\Correspondent\Year\YYYY-MM-DD` convention used
-for local financial-document sorting — category first so you can browse "all Insurance",
-correspondent next so a company's history stays together, year for the yearly cutoff,
-then a sortable date-prefixed filename.
+Category first so you can browse one document type, correspondent next so a
+vendor's history stays together, year for the yearly cutoff, then a sortable
+date-prefixed filename.
 `PAPERLESS_FILENAME_FORMAT_REMOVE_NONE=true` collapses the `document_type`/`correspondent`
 segments to nothing (instead of literal `none/`) for documents you haven't classified yet,
 so freshly-OCR'd, untriaged documents don't clutter the tree with `none/none/...` folders.
@@ -69,31 +68,27 @@ do the finer sorting on the way out:
 
 ```
 consume/
-  Financial/
-  Tax/
-  Medical/
-  Insurance/
-  Legal/
-  Home/
-  Vehicle/
-  Personal/
+  Incoming/
+  Correspondence/
+  Records/
 ```
 
-Drop a scanned document into `consume/Tax/` and it's tagged `Tax` immediately, before OCR
+Drop a scanned document into `consume/Incoming/` and it's tagged `Incoming` immediately, before OCR
 even finishes classifying correspondent/type. Avoid nesting deeper (e.g.
-`consume/Financial/ExampleBank/`) — every extra path segment is another tag, and correspondent-level
+`consume/Incoming/ExampleVendor/`) — every extra path segment is another tag, and correspondent-level
 detail belongs in the matching rules above, not the drop folder.
 
 ### Storage paths (per-category overrides)
 
-If one archive layout doesn't fit everything — e.g. tax documents should group by tax year
-regardless of correspondent — use Paperless's **Storage paths** feature (Settings → Storage
-paths, configured in the UI/API, not an env var). Each storage path is its own
-`PAPERLESS_FILENAME_FORMAT`-style template matched to documents by tag/correspondent/type,
-and overrides the global format for just those documents. Example for the `Tax` tag:
+If one archive layout doesn't fit everything — e.g. a tag whose files should group by
+year regardless of correspondent — use Paperless's **Storage paths** feature
+(Settings → Storage paths, configured in the UI/API, not an env var). Each storage
+path is its own `PAPERLESS_FILENAME_FORMAT`-style template matched to documents by
+tag/correspondent/type, and overrides the global format for just those documents.
+Example for an `Incoming` tag:
 
 ```
-Tax/{{ created_year }}/{{ correspondent }}-{{ title }}
+Incoming/{{ created_year }}/{{ correspondent }}-{{ title }}
 ```
 
 ### Changing the format later
@@ -102,7 +97,7 @@ If you change `PAPERLESS_FILENAME_FORMAT` (or a storage path) after documents al
 existing archived files keep their old names/paths until you run the renamer:
 
 ```bash
-docker exec -it paperless-webserver python3 manage.py document_renamer
+docker exec -u 9000 -it paperless-webserver python3 manage.py document_renamer
 ```
 
 Never rename/move files inside `media/` by hand — Paperless tracks the last path it wrote
@@ -170,9 +165,9 @@ If the account already exists, those env vars are ignored — reset the password
 on the host instead:
 
 ```bash
-docker exec -it paperless-webserver python3 manage.py changepassword admin
+docker exec -u 9000 -it paperless-webserver python3 manage.py changepassword admin
 # or create a new superuser:
-docker exec -it paperless-webserver python3 manage.py createsuperuser
+docker exec -u 9000 -it paperless-webserver python3 manage.py createsuperuser
 ```
 
 ## Backup & restore
@@ -192,9 +187,12 @@ must cover the database, not just the files.
 
 ### Scheduled snapshot
 
-`backup.sh` runs Paperless's own `document_exporter` and drops a dated zip into
-the NFS export share — documents, metadata, users and tags together, in the
-format `document_importer` consumes:
+`backup.sh` runs Paperless's own `document_exporter` as UID 9000 (compose
+`USERMAP_UID`) and drops a dated zip into the NFS export share — documents,
+metadata, users and tags together, in the format `document_importer` consumes.
+It first probes that the export bind is writable as that UID, then runs the
+exporter; both steps use `docker exec -u 9000`. Do not run the exporter as
+root: NAS `root_squash` maps UID 0 to `nobody` and the zip will not land.
 
 ```bash
 ./backup.sh
@@ -224,7 +222,7 @@ From a `document_exporter` archive, into an **empty** install:
 
 ```bash
 unzip paperless-backup-YYYY-MM-DD.zip -d /mnt/nfs/appdata/paperless-ngx/export/restore
-docker exec -it paperless-webserver python3 manage.py document_importer ../export/restore
+docker exec -u 9000 -it paperless-webserver python3 manage.py document_importer ../export/restore
 ```
 
 From a `pg_dump`, with the webserver and broker stopped, into an empty `paperless` database:
@@ -275,5 +273,5 @@ behavior. If login returns 403 behind the reverse proxy, set `PAPERLESS_TRUSTED_
   `file:///tmp/.*` allow-list, so tracking pixels / scripts can't load.
 - **Permissions:** Paperless runs as UID 9000, matching the NFS share owner, so
   writes to `consume`/`media`/`export` succeed. NAS `root_squash` maps UID 0
-  to `nobody`, so a `docker exec` as root will appear to fail write tests — test
-  as UID 9000 instead.
+  to `nobody`, so a `docker exec` as root will appear to fail write tests.
+  `backup.sh` probes writability and runs `document_exporter` as UID 9000.
